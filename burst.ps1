@@ -127,3 +127,32 @@ Write-Host "5xx       : $serverError"
 
 Write-Host ""
 Write-Host "Burst test completed."
+
+Write-Host ""
+Write-Host "========== RECONCILIATION =========="
+Write-Host ""
+
+$confirmedResult = $results | Where-Object { $_.StatusCode -eq 201 } | Select-Object -First 1
+
+if ($confirmedResult) {
+    $confirmedBody = $confirmedResult.Body | ConvertFrom-Json
+    $reservationId = $confirmedBody.reservationId
+
+    Write-Host "Confirmed reservation ID : $reservationId"
+
+    try {
+        $reservation = Invoke-RestMethod `
+            -Uri "$BaseUrl/api/reservations/$reservationId" `
+            -Method GET
+
+        Write-Host "Final reservation status : $($reservation.status)"
+        Write-Host "Final user ID            : $($reservation.userId)"
+        Write-Host "Final total amount      : $($reservation.totalAmountPaise)"
+    }
+    catch {
+        Write-Host "Reconciliation failed"
+    }
+}
+else {
+    Write-Host "No confirmed reservation found"
+}
