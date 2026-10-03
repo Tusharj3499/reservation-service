@@ -8,18 +8,33 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
-public interface ReservationRepository extends JpaRepository<Reservation, Long> {
+public interface ReservationRepository
+        extends JpaRepository<Reservation, Long> {
 
-    long countByUserIdAndStatus(Long userId, ReservationStatus status);
+    long countByUserIdAndStatus(
+            Long userId,
+            ReservationStatus status);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
-        SELECT r
-        FROM Reservation r
-        WHERE r.id = :reservationId
-        """)
+            SELECT r
+            FROM Reservation r
+            WHERE r.id = :reservationId
+            """)
     Optional<Reservation> findByIdForUpdate(
             @Param("reservationId") Long reservationId);
+
+    @Query("""
+            SELECT r
+            FROM Reservation r
+            WHERE r.status = :status
+              AND r.holdExpiresAt <= :now
+            """)
+    List<Reservation> findExpiredHeldReservations(
+            @Param("status") ReservationStatus status,
+            @Param("now") LocalDateTime now);
 }
