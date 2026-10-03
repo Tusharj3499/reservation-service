@@ -28,6 +28,9 @@ public class Reservation {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Column(name = "hold_expires_at")
+    private LocalDateTime holdExpiresAt;
+
     public Reservation() {
     }
 
@@ -81,5 +84,21 @@ public class Reservation {
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public LocalDateTime getHoldExpiresAt() {
+        return holdExpiresAt;
+    }
+
+    public void setHoldExpiresAt(LocalDateTime holdExpiresAt) {
+        this.holdExpiresAt = holdExpiresAt;
     }
 }

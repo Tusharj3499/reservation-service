@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -71,10 +72,11 @@ public class ReservationService {
             return handleExistingRequest(existingRecord, requestHash);
         }
 
-        UserReservationLimit userReservationLimit =
-                validateUserReservationLimit(request.getUserId());
+        validateUserReservationLimit(request.getUserId());
 
-        List<Long> seatIds = new ArrayList<>(request.getSeatIds());
+        List<Long> seatIds =
+                new ArrayList<>(request.getSeatIds());
+
         Collections.sort(seatIds);
 
         List<Seat> seats =
@@ -90,8 +92,6 @@ public class ReservationService {
 
         saveReservationSeats(savedReservation, seats);
 
-        incrementUserReservationCount(userReservationLimit);
-
         IdempotencyRecord idempotencyRecord =
                 createIdempotencyRecord(
                         idempotencyKey,
@@ -101,6 +101,73 @@ public class ReservationService {
         idempotencyRecordRepository.save(idempotencyRecord);
 
         return buildResponse(savedReservation, seatIds);
+    }
+
+    @Transactional
+    public CreateReservationResponse confirmReservation(
+            Long reservationId) {
+
+        Reservation reservation =
+                reservationRepository.findById(reservationId)
+                        .orElseThrow(() ->
+                                new ReservationException(
+                                        "Reservation not found"));
+
+        if (reservation.getStatus() != ReservationStatus.HELD) {
+            throw new ReservationException(
+                    "Only held reservations can be confirmed");
+        }
+
+        if (reservation.getHoldExpiresAt() != null
+                && reservation.getHoldExpiresAt()
+                .isBefore(LocalDateTime.now())) {
+
+            throw new ReservationException(
+                    "Reservation hold has expired");
+        }
+
+        UserReservationLimit userReservationLimit =
+                lockUserReservationLimit(reservation.getUserId());
+
+        if (userReservationLimit.getConfirmedCount()
+                >= MAX_RESERVATIONS_PER_USER) {
+
+            throw new ReservationException(
+                    "User has reached the maximum reservation limit");
+        }
+
+        List<ReservationSeat> reservationSeats =
+                reservationSeatRepository
+                        .findByReservationId(reservationId);
+
+        for (ReservationSeat reservationSeat : reservationSeats) {
+
+            Seat seat = reservationSeat.getSeat();
+
+            if (seat.getStatus() != SeatStatus.HELD) {
+                throw new SeatUnavailableException(
+                        "Seat " + seat.getSeatNumber()
+                                + " is no longer held");
+            }
+
+            seat.setStatus(SeatStatus.RESERVED);
+        }
+
+        reservation.setStatus(ReservationStatus.CONFIRMED);
+        reservation.setHoldExpiresAt(null);
+
+        reservationRepository.save(reservation);
+
+        incrementUserReservationCount(userReservationLimit);
+
+        List<Long> seatIds =
+                reservationSeats.stream()
+                        .map(reservationSeat ->
+                                reservationSeat.getSeat().getId())
+                        .sorted()
+                        .toList();
+
+        return buildResponse(reservation, seatIds);
     }
 
     private void validateRequest(
@@ -124,7 +191,9 @@ public class ReservationService {
                     "At least one seat is required");
         }
 
-        if (request.getSeatIds().size() > MAX_SEATS_PER_RESERVATION) {
+        if (request.getSeatIds().size()
+                > MAX_SEATS_PER_RESERVATION) {
+
             throw new ReservationException(
                     "Maximum "
                             + MAX_SEATS_PER_RESERVATION
@@ -132,17 +201,10 @@ public class ReservationService {
         }
     }
 
-    private UserReservationLimit validateUserReservationLimit(
-            Long userId) {
-
-        userReservationLimitRepository.createIfNotExists(userId);
+    private void validateUserReservationLimit(Long userId) {
 
         UserReservationLimit userReservationLimit =
-                userReservationLimitRepository
-                        .findByUserIdForUpdate(userId)
-                        .orElseThrow(() ->
-                                new ReservationException(
-                                        "Unable to initialize user reservation limit"));
+                lockUserReservationLimit(userId);
 
         if (userReservationLimit.getConfirmedCount()
                 >= MAX_RESERVATIONS_PER_USER) {
@@ -150,8 +212,18 @@ public class ReservationService {
             throw new ReservationException(
                     "User has reached the maximum reservation limit");
         }
+    }
 
-        return userReservationLimit;
+    private UserReservationLimit lockUserReservationLimit(
+            Long userId) {
+
+        userReservationLimitRepository.createIfNotExists(userId);
+
+        return userReservationLimitRepository
+                .findByUserIdForUpdate(userId)
+                .orElseThrow(() ->
+                        new ReservationException(
+                                "Unable to initialize user reservation limit"));
     }
 
     private void incrementUserReservationCount(
@@ -160,7 +232,8 @@ public class ReservationService {
         userReservationLimit.setConfirmedCount(
                 userReservationLimit.getConfirmedCount() + 1);
 
-        userReservationLimitRepository.save(userReservationLimit);
+        userReservationLimitRepository.save(
+                userReservationLimit);
     }
 
     private CreateReservationResponse handleExistingRequest(
@@ -204,8 +277,7 @@ public class ReservationService {
 
             if (seat.getStatus() != SeatStatus.AVAILABLE) {
                 throw new SeatUnavailableException(
-                        "Seat "
-                                + seat.getSeatNumber()
+                        "Seat " + seat.getSeatNumber()
                                 + " is not available");
             }
         }
@@ -217,9 +289,13 @@ public class ReservationService {
         Reservation reservation = new Reservation();
 
         reservation.setUserId(request.getUserId());
-        reservation.setStatus(ReservationStatus.CONFIRMED);
+        reservation.setStatus(ReservationStatus.HELD);
         reservation.setTotalAmountPaise(
                 request.getTotalAmountPaise());
+
+        reservation.setHoldExpiresAt(
+                LocalDateTime.now()
+                        .plusMinutes(HOLD_DURATION_MINUTES));
 
         return reservation;
     }
@@ -230,7 +306,7 @@ public class ReservationService {
 
         for (Seat seat : seats) {
 
-            seat.setStatus(SeatStatus.RESERVED);
+            seat.setStatus(SeatStatus.HELD);
 
             ReservationSeat reservationSeat =
                     new ReservationSeat();
