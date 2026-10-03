@@ -41,4 +41,13 @@ public class ReservationController {
                 reservationService.getReservation(reservationId)
         );
     }
+
+    @PostMapping("/{reservationId}/confirm")
+    public ResponseEntity<CreateReservationResponse> confirmReservation(
+            @PathVariable Long reservationId) {
+
+        return ResponseEntity.ok(
+                reservationService.confirmReservation(reservationId)
+        );
+    }
 }
