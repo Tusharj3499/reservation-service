@@ -2,6 +2,7 @@ package com.seat.reservation.controller;
 
 import com.seat.reservation.dto.CreateReservationRequest;
 import com.seat.reservation.dto.CreateReservationResponse;
+import com.seat.reservation.entity.Reservation;
 import com.seat.reservation.service.ReservationService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -30,5 +31,14 @@ public class ReservationController {
         return ResponseEntity
                 .status(201)
                 .body(response);
+    }
+
+    @GetMapping("/{reservationId}")
+    public ResponseEntity<Reservation> getReservation(
+            @PathVariable Long reservationId) {
+
+        return ResponseEntity.ok(
+                reservationService.getReservation(reservationId)
+        );
     }
 }

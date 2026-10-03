@@ -37,4 +37,9 @@ public interface ReservationRepository
     List<Reservation> findExpiredHeldReservations(
             @Param("status") ReservationStatus status,
             @Param("now") LocalDateTime now);
+
+
+    Optional<Reservation> findById(Long reservationId);
+
+
 }

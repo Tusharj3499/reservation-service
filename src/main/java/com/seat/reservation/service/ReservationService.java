@@ -443,4 +443,11 @@ public class ReservationService {
                     "Unable to generate request hash");
         }
     }
+
+
+    public Reservation getReservation(Long reservationId) {
+        return reservationRepository.findById(reservationId)
+                .orElseThrow(() ->
+                        new ReservationException("Reservation not found"));
+    }
 }
