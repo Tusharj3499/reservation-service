@@ -1,0 +1,286 @@
+package com.seat.reservation.service;
+
+import com.seat.reservation.dto.CreateReservationRequest;
+import com.seat.reservation.dto.CreateReservationResponse;
+import com.seat.reservation.entity.IdempotencyRecord;
+import com.seat.reservation.entity.Reservation;
+import com.seat.reservation.entity.ReservationSeat;
+import com.seat.reservation.entity.ReservationStatus;
+import com.seat.reservation.entity.Seat;
+import com.seat.reservation.entity.SeatStatus;
+import com.seat.reservation.exception.ReservationException;
+import com.seat.reservation.exception.SeatUnavailableException;
+import com.seat.reservation.repository.IdempotencyRecordRepository;
+import com.seat.reservation.repository.ReservationRepository;
+import com.seat.reservation.repository.ReservationSeatRepository;
+import com.seat.reservation.repository.SeatRepository;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+@Service
+public class ReservationService {
+
+    private static final int MAX_SEATS_PER_RESERVATION = 5;
+    private static final int MAX_RESERVATIONS_PER_USER= 5;
+    private final SeatRepository seatRepository;
+    private final ReservationRepository reservationRepository;
+    private final ReservationSeatRepository reservationSeatRepository;
+    private final IdempotencyRecordRepository idempotencyRecordRepository;
+
+    public ReservationService(
+            SeatRepository seatRepository,
+            ReservationRepository reservationRepository,
+            ReservationSeatRepository reservationSeatRepository,
+            IdempotencyRecordRepository idempotencyRecordRepository) {
+
+        this.seatRepository = seatRepository;
+        this.reservationRepository = reservationRepository;
+        this.reservationSeatRepository = reservationSeatRepository;
+        this.idempotencyRecordRepository = idempotencyRecordRepository;
+    }
+
+    @Transactional
+    public CreateReservationResponse createReservation(
+            CreateReservationRequest request,
+            String idempotencyKey) {
+
+        validateRequest(request, idempotencyKey);
+
+        String requestHash = generateRequestHash(request);
+
+        IdempotencyRecord existingRecord =
+                idempotencyRecordRepository
+                        .findByIdempotencyKeyForUpdate(idempotencyKey)
+                        .orElse(null);
+
+        if (existingRecord != null) {
+            return handleExistingRequest(existingRecord, requestHash);
+        }
+
+        validateUserReservationLimit(request.getUserId());
+
+        List<Long> seatIds = new ArrayList<>(request.getSeatIds());
+        Collections.sort(seatIds);
+
+        List<Seat> seats = seatRepository.findAllByIdForUpdate(seatIds);
+
+        validateSeats(seatIds, seats);
+
+        Reservation reservation = createReservationEntity(request);
+
+        Reservation savedReservation =
+                reservationRepository.save(reservation);
+
+        saveReservationSeats(savedReservation, seats);
+
+        IdempotencyRecord idempotencyRecord =
+                createIdempotencyRecord(
+                        idempotencyKey,
+                        requestHash,
+                        savedReservation.getId());
+
+        idempotencyRecordRepository.save(idempotencyRecord);
+
+        return buildResponse(savedReservation, seatIds);
+    }
+
+    private void validateRequest(
+            CreateReservationRequest request,
+            String idempotencyKey) {
+
+        if (request == null) {
+            throw new ReservationException(
+                    "Request cannot be null");
+        }
+
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new ReservationException(
+                    "Idempotency-Key header is required");
+        }
+
+        if (request.getSeatIds() == null
+                || request.getSeatIds().isEmpty()) {
+
+            throw new ReservationException(
+                    "At least one seat is required");
+        }
+
+        if (request.getSeatIds().size()
+                > MAX_SEATS_PER_RESERVATION) {
+
+            throw new ReservationException(
+                    "Maximum "
+                            + MAX_SEATS_PER_RESERVATION
+                            + " seats can be reserved in one request");
+        }
+    }
+
+    private CreateReservationResponse handleExistingRequest(
+            IdempotencyRecord existingRecord,
+            String requestHash) {
+
+        if (!existingRecord.getRequestHash().equals(requestHash)) {
+            throw new ReservationException(
+                    "Idempotency-Key has already been used "
+                            + "with a different request");
+        }
+
+        Reservation reservation =
+                reservationRepository
+                        .findById(existingRecord.getReservationId())
+                        .orElseThrow(() ->
+                                new ReservationException(
+                                        "Reservation associated with "
+                                                + "idempotency key was not found"));
+
+        List<Long> seatIds =
+                reservationSeatRepository
+                        .findByReservationId(reservation.getId())
+                        .stream()
+                        .map(reservationSeat ->
+                                reservationSeat.getSeat().getId())
+                        .sorted()
+                        .toList();
+
+        return buildResponse(reservation, seatIds);
+    }
+
+    private void validateSeats(
+            List<Long> requestedSeatIds,
+            List<Seat> seats) {
+
+        if (seats.size() != requestedSeatIds.size()) {
+            throw new SeatUnavailableException(
+                    "One or more requested seats do not exist");
+        }
+
+        for (Seat seat : seats) {
+
+            if (seat.getStatus() != SeatStatus.AVAILABLE) {
+                throw new SeatUnavailableException(
+                        "Seat "
+                                + seat.getSeatNumber()
+                                + " is not available");
+            }
+        }
+    }
+
+    private Reservation createReservationEntity(
+            CreateReservationRequest request) {
+
+        Reservation reservation = new Reservation();
+
+        reservation.setUserId(request.getUserId());
+        reservation.setStatus(ReservationStatus.CONFIRMED);
+        reservation.setTotalAmountPaise(
+                request.getTotalAmountPaise());
+
+        return reservation;
+    }
+
+    private void saveReservationSeats(
+            Reservation reservation,
+            List<Seat> seats) {
+
+        for (Seat seat : seats) {
+
+            seat.setStatus(SeatStatus.RESERVED);
+
+            ReservationSeat reservationSeat =
+                    new ReservationSeat();
+
+            reservationSeat.setReservation(reservation);
+            reservationSeat.setSeat(seat);
+
+            reservationSeatRepository.save(reservationSeat);
+        }
+    }
+
+    private IdempotencyRecord createIdempotencyRecord(
+            String idempotencyKey,
+            String requestHash,
+            Long reservationId) {
+
+        IdempotencyRecord record =
+                new IdempotencyRecord();
+
+        record.setIdempotencyKey(idempotencyKey);
+        record.setRequestHash(requestHash);
+        record.setReservationId(reservationId);
+        record.setResponseStatus(201);
+
+        return record;
+    }
+
+    private CreateReservationResponse buildResponse(
+            Reservation reservation,
+            List<Long> seatIds) {
+
+        return new CreateReservationResponse(
+                reservation.getId(),
+                reservation.getUserId(),
+                seatIds,
+                reservation.getStatus(),
+                reservation.getTotalAmountPaise());
+    }
+
+    private String generateRequestHash(
+            CreateReservationRequest request) {
+
+        List<Long> seatIds =
+                new ArrayList<>(request.getSeatIds());
+
+        Collections.sort(seatIds);
+
+        String requestData =
+                request.getUserId()
+                        + "|"
+                        + seatIds
+                        + "|"
+                        + request.getTotalAmountPaise();
+
+        try {
+            MessageDigest digest =
+                    MessageDigest.getInstance("SHA-256");
+
+            byte[] hash =
+                    digest.digest(
+                            requestData.getBytes(
+                                    StandardCharsets.UTF_8));
+
+            StringBuilder result = new StringBuilder();
+
+            for (byte value : hash) {
+                result.append(
+                        String.format("%02x", value));
+            }
+
+            return result.toString();
+
+        } catch (NoSuchAlgorithmException exception) {
+            throw new ReservationException(
+                    "Unable to generate request hash");
+        }
+    }
+
+
+    private void validateUserReservationLimit(Long userId) {
+
+        long confirmedReservations =
+                reservationRepository.countByUserIdAndStatus(
+                        userId,
+                        ReservationStatus.CONFIRMED);
+
+        if (confirmedReservations >= MAX_RESERVATIONS_PER_USER) {
+            throw new ReservationException(
+                    "User has reached the maximum reservation limit");
+        }
+    }
+}
