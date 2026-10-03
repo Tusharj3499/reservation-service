@@ -1,4 +1,56 @@
-**## Reservation API**
+**# API Endpoints**
+
+
+
+**### Create Reservation**
+
+
+
+**POST /api/reservations**
+
+
+
+**Creates a reservation and temporarily holds the requested seats.**
+
+
+
+**Headers:**
+
+**Content-Type: application/json**
+
+**Idempotency-Key: <unique-key>**
+
+
+
+**Request:**
+
+**{**
+
+&#x20; **"userId": 101,**
+
+&#x20; **"seatIds": \[1, 2],**
+
+&#x20; **"totalAmountPaise": 5068**
+
+**}**
+
+
+
+**### Confirm Reservation**
+
+
+
+**POST /api/reservations/{reservationId}/confirm**
+
+
+
+**Confirms a held reservation and reserves the seats.**
+
+
+
+**Example:**
+
+**POST /api/reservations/1/confirm**
 
 
 
@@ -6,31 +58,33 @@
 
 
 
-**Returns the current state of a reservation.**
-
-
-
-
-
 **GET /api/reservations/{reservationId}**
 
 
 
-**Example**
+**Returns the current state of a reservation.**
 
 
 
-**GET http://localhost:8080/api/reservations/1**
+**Example:**
 
-**{**
+**GET /api/reservations/1**
 
-&#x20; **"id": 1,**
 
-&#x20; **"userId": 101,**
 
-&#x20; **"status": "CONFIRMED",**
+**### Health Check**
 
-&#x20; **"totalAmountPaise": 5068**
 
-**}**
+
+**GET /actuator/health**
+
+
+
+**Checks whether the reservation service is running.**
+
+
+
+**Example:**
+
+**GET http://localhost:8080/actuator/health**
 
