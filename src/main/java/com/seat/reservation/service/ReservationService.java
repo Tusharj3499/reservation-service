@@ -16,6 +16,8 @@ import com.seat.reservation.repository.ReservationRepository;
 import com.seat.reservation.repository.ReservationSeatRepository;
 import com.seat.reservation.repository.SeatRepository;
 import com.seat.reservation.repository.UserReservationLimitRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +31,8 @@ import java.util.List;
 
 @Service
 public class ReservationService {
+
+    private static final Logger logger = LoggerFactory.getLogger(ReservationService.class);
 
     private static final int MAX_SEATS_PER_RESERVATION = 5;
     private static final int MAX_RESERVATIONS_PER_USER = 5;
@@ -96,7 +100,15 @@ public class ReservationService {
 
         idempotencyRecordRepository.save(idempotencyRecord);
 
+        logger.info(
+                "Reservation created: reservationId={}, userId={}, seatIds={}, status={}",
+                savedReservation.getId(),
+                savedReservation.getUserId(),
+                seatIds,
+                savedReservation.getStatus());
+
         return buildResponse(savedReservation, seatIds);
+
     }
 
     @Transactional
@@ -157,6 +169,16 @@ public class ReservationService {
         incrementUserReservationCount(userReservationLimit);
         reservationMetricsService.reservationConfirmed();
 
+        logger.info(
+                "Reservation confirmed: reservationId={}, userId={}, seatIds={}",
+                reservation.getId(),
+                reservation.getUserId(),
+                reservationSeats.stream()
+                        .map(reservationSeat ->
+                                reservationSeat.getSeat().getSeatNumber())
+                        .sorted()
+                        .toList());
+
         List<Long> seatIds =
                 reservationSeats.stream()
                         .map(reservationSeat ->
@@ -205,6 +227,11 @@ public class ReservationService {
 
         if (userReservationLimit.getConfirmedCount()
                 >= MAX_RESERVATIONS_PER_USER) {
+
+            logger.warn(
+                    "Reservation declined: userId={}, reason=per-user-limit, confirmedCount={}",
+                    userId,
+                    userReservationLimit.getConfirmedCount());
 
             reservationMetricsService
                     .reservationDeclinedUserLimit();
@@ -261,7 +288,13 @@ public class ReservationService {
                         .sorted()
                         .toList();
 
-        reservationMetricsService.reservationDeclinedIdempotentReplay();
+        logger.info(
+                "Idempotent replay: idempotencyKey={}, reservationId={}",
+                existingRecord.getIdempotencyKey(),
+                existingRecord.getReservationId());
+
+        reservationMetricsService
+                .reservationDeclinedIdempotentReplay();
 
         return buildResponse(reservation, seatIds);
     }
@@ -278,6 +311,11 @@ public class ReservationService {
         for (Seat seat : seats) {
 
             if (seat.getStatus() != SeatStatus.AVAILABLE) {
+
+                logger.warn(
+                        "Reservation declined: seatId={}, seatNumber={}, reason=seat-taken",
+                        seat.getId(),
+                        seat.getSeatNumber());
 
                 reservationMetricsService
                         .reservationDeclinedSeatTaken();

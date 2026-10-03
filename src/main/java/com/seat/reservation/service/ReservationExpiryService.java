@@ -8,6 +8,8 @@ import com.seat.reservation.entity.SeatStatus;
 import com.seat.reservation.repository.ReservationRepository;
 import com.seat.reservation.repository.ReservationSeatRepository;
 import com.seat.reservation.repository.SeatRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,6 +19,9 @@ import java.util.List;
 
 @Service
 public class ReservationExpiryService {
+
+    private static final Logger logger =
+            LoggerFactory.getLogger(ReservationExpiryService.class);
 
     private final ReservationRepository reservationRepository;
     private final ReservationSeatRepository reservationSeatRepository;
@@ -46,14 +51,17 @@ public class ReservationExpiryService {
 
             List<ReservationSeat> reservationSeats =
                     reservationSeatRepository
-                            .findByReservationId(reservation.getId());
+                            .findByReservationId(
+                                    reservation.getId());
 
             for (ReservationSeat reservationSeat : reservationSeats) {
 
                 Seat seat = reservationSeat.getSeat();
 
                 if (seat.getStatus() == SeatStatus.HELD) {
+
                     seat.setStatus(SeatStatus.AVAILABLE);
+
                     seatRepository.save(seat);
                 }
             }
@@ -62,6 +70,11 @@ public class ReservationExpiryService {
             reservation.setHoldExpiresAt(null);
 
             reservationRepository.save(reservation);
+
+            logger.info(
+                    "Reservation expired: reservationId={}, userId={}",
+                    reservation.getId(),
+                    reservation.getUserId());
         }
     }
 }
