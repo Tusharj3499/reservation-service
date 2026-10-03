@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: reservation-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: reservation_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  prometheus:
+    image: prom/prometheus
+    container_name: reservation-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+volumes:
+  mysql_data:
