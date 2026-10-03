@@ -18,6 +18,7 @@ import com.seat.reservation.repository.SeatRepository;
 import com.seat.reservation.repository.UserReservationLimitRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -98,7 +99,19 @@ public class ReservationService {
                         requestHash,
                         savedReservation.getId());
 
-        idempotencyRecordRepository.save(idempotencyRecord);
+        try {
+            idempotencyRecordRepository.save(idempotencyRecord);
+        } catch (DataIntegrityViolationException exception) {
+
+            IdempotencyRecord existingRecords =
+                    idempotencyRecordRepository
+                            .findByIdempotencyKey(idempotencyKey)
+                            .orElseThrow(() ->
+                                    new ReservationException(
+                                            "Unable to process idempotent request"));
+
+            return handleExistingRequest(existingRecords, requestHash);
+        }
 
         logger.info(
                 "Reservation created: reservationId={}, userId={}, seatIds={}, status={}",
@@ -116,7 +129,7 @@ public class ReservationService {
             Long reservationId) {
 
         Reservation reservation =
-                reservationRepository.findById(reservationId)
+                reservationRepository.findByIdForUpdate(reservationId)
                         .orElseThrow(() ->
                                 new ReservationException(
                                         "Reservation not found"));
@@ -147,6 +160,7 @@ public class ReservationService {
         List<ReservationSeat> reservationSeats =
                 reservationSeatRepository
                         .findByReservationId(reservationId);
+
 
         for (ReservationSeat reservationSeat : reservationSeats) {
 

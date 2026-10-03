@@ -14,10 +14,13 @@ public interface IdempotencyRecordRepository
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
-            SELECT i
-            FROM IdempotencyRecord i
-            WHERE i.idempotencyKey = :idempotencyKey
-            """)
+        SELECT i
+        FROM IdempotencyRecord i
+        WHERE i.idempotencyKey = :idempotencyKey
+        """)
     Optional<IdempotencyRecord> findByIdempotencyKeyForUpdate(
             @Param("idempotencyKey") String idempotencyKey);
+
+    Optional<IdempotencyRecord> findByIdempotencyKey(
+            String idempotencyKey);
 }

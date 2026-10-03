@@ -54,6 +54,14 @@ public class ReservationExpiryService {
                             .findByReservationId(
                                     reservation.getId());
 
+            List<Long> seatIds = reservationSeats.stream()
+                    .map(reservationSeat ->
+                            reservationSeat.getSeat().getId())
+                    .sorted()
+                    .toList();
+
+            seatRepository.findAllByIdForUpdate(seatIds);
+
             for (ReservationSeat reservationSeat : reservationSeats) {
 
                 Seat seat = reservationSeat.getSeat();
