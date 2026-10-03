@@ -8,12 +8,14 @@ import com.seat.reservation.entity.ReservationSeat;
 import com.seat.reservation.entity.ReservationStatus;
 import com.seat.reservation.entity.Seat;
 import com.seat.reservation.entity.SeatStatus;
+import com.seat.reservation.entity.UserReservationLimit;
 import com.seat.reservation.exception.ReservationException;
 import com.seat.reservation.exception.SeatUnavailableException;
 import com.seat.reservation.repository.IdempotencyRecordRepository;
 import com.seat.reservation.repository.ReservationRepository;
 import com.seat.reservation.repository.ReservationSeatRepository;
 import com.seat.reservation.repository.SeatRepository;
+import com.seat.reservation.repository.UserReservationLimitRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,22 +30,27 @@ import java.util.List;
 public class ReservationService {
 
     private static final int MAX_SEATS_PER_RESERVATION = 5;
-    private static final int MAX_RESERVATIONS_PER_USER= 5;
+    private static final int MAX_RESERVATIONS_PER_USER = 5;
+    private static final int HOLD_DURATION_MINUTES = 5;
+
     private final SeatRepository seatRepository;
     private final ReservationRepository reservationRepository;
     private final ReservationSeatRepository reservationSeatRepository;
     private final IdempotencyRecordRepository idempotencyRecordRepository;
+    private final UserReservationLimitRepository userReservationLimitRepository;
 
     public ReservationService(
             SeatRepository seatRepository,
             ReservationRepository reservationRepository,
             ReservationSeatRepository reservationSeatRepository,
-            IdempotencyRecordRepository idempotencyRecordRepository) {
+            IdempotencyRecordRepository idempotencyRecordRepository,
+            UserReservationLimitRepository userReservationLimitRepository) {
 
         this.seatRepository = seatRepository;
         this.reservationRepository = reservationRepository;
         this.reservationSeatRepository = reservationSeatRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
+        this.userReservationLimitRepository = userReservationLimitRepository;
     }
 
     @Transactional
@@ -64,21 +71,26 @@ public class ReservationService {
             return handleExistingRequest(existingRecord, requestHash);
         }
 
-        validateUserReservationLimit(request.getUserId());
+        UserReservationLimit userReservationLimit =
+                validateUserReservationLimit(request.getUserId());
 
         List<Long> seatIds = new ArrayList<>(request.getSeatIds());
         Collections.sort(seatIds);
 
-        List<Seat> seats = seatRepository.findAllByIdForUpdate(seatIds);
+        List<Seat> seats =
+                seatRepository.findAllByIdForUpdate(seatIds);
 
         validateSeats(seatIds, seats);
 
-        Reservation reservation = createReservationEntity(request);
+        Reservation reservation =
+                createReservationEntity(request);
 
         Reservation savedReservation =
                 reservationRepository.save(reservation);
 
         saveReservationSeats(savedReservation, seats);
+
+        incrementUserReservationCount(userReservationLimit);
 
         IdempotencyRecord idempotencyRecord =
                 createIdempotencyRecord(
@@ -112,14 +124,43 @@ public class ReservationService {
                     "At least one seat is required");
         }
 
-        if (request.getSeatIds().size()
-                > MAX_SEATS_PER_RESERVATION) {
-
+        if (request.getSeatIds().size() > MAX_SEATS_PER_RESERVATION) {
             throw new ReservationException(
                     "Maximum "
                             + MAX_SEATS_PER_RESERVATION
                             + " seats can be reserved in one request");
         }
+    }
+
+    private UserReservationLimit validateUserReservationLimit(
+            Long userId) {
+
+        userReservationLimitRepository.createIfNotExists(userId);
+
+        UserReservationLimit userReservationLimit =
+                userReservationLimitRepository
+                        .findByUserIdForUpdate(userId)
+                        .orElseThrow(() ->
+                                new ReservationException(
+                                        "Unable to initialize user reservation limit"));
+
+        if (userReservationLimit.getConfirmedCount()
+                >= MAX_RESERVATIONS_PER_USER) {
+
+            throw new ReservationException(
+                    "User has reached the maximum reservation limit");
+        }
+
+        return userReservationLimit;
+    }
+
+    private void incrementUserReservationCount(
+            UserReservationLimit userReservationLimit) {
+
+        userReservationLimit.setConfirmedCount(
+                userReservationLimit.getConfirmedCount() + 1);
+
+        userReservationLimitRepository.save(userReservationLimit);
     }
 
     private CreateReservationResponse handleExistingRequest(
@@ -128,8 +169,7 @@ public class ReservationService {
 
         if (!existingRecord.getRequestHash().equals(requestHash)) {
             throw new ReservationException(
-                    "Idempotency-Key has already been used "
-                            + "with a different request");
+                    "Idempotency-Key has already been used with a different request");
         }
 
         Reservation reservation =
@@ -137,8 +177,7 @@ public class ReservationService {
                         .findById(existingRecord.getReservationId())
                         .orElseThrow(() ->
                                 new ReservationException(
-                                        "Reservation associated with "
-                                                + "idempotency key was not found"));
+                                        "Reservation associated with idempotency key was not found"));
 
         List<Long> seatIds =
                 reservationSeatRepository
@@ -234,15 +273,15 @@ public class ReservationService {
     private String generateRequestHash(
             CreateReservationRequest request) {
 
-        List<Long> seatIds =
+        List<Long> sortedSeatIds =
                 new ArrayList<>(request.getSeatIds());
 
-        Collections.sort(seatIds);
+        Collections.sort(sortedSeatIds);
 
         String requestData =
                 request.getUserId()
                         + "|"
-                        + seatIds
+                        + sortedSeatIds
                         + "|"
                         + request.getTotalAmountPaise();
 
@@ -255,7 +294,8 @@ public class ReservationService {
                             requestData.getBytes(
                                     StandardCharsets.UTF_8));
 
-            StringBuilder result = new StringBuilder();
+            StringBuilder result =
+                    new StringBuilder();
 
             for (byte value : hash) {
                 result.append(
@@ -267,20 +307,6 @@ public class ReservationService {
         } catch (NoSuchAlgorithmException exception) {
             throw new ReservationException(
                     "Unable to generate request hash");
-        }
-    }
-
-
-    private void validateUserReservationLimit(Long userId) {
-
-        long confirmedReservations =
-                reservationRepository.countByUserIdAndStatus(
-                        userId,
-                        ReservationStatus.CONFIRMED);
-
-        if (confirmedReservations >= MAX_RESERVATIONS_PER_USER) {
-            throw new ReservationException(
-                    "User has reached the maximum reservation limit");
         }
     }
 }
