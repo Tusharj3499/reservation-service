@@ -39,19 +39,15 @@ public class ReservationService {
     private final ReservationSeatRepository reservationSeatRepository;
     private final IdempotencyRecordRepository idempotencyRecordRepository;
     private final UserReservationLimitRepository userReservationLimitRepository;
+    private final ReservationMetricsService reservationMetricsService;
 
-    public ReservationService(
-            SeatRepository seatRepository,
-            ReservationRepository reservationRepository,
-            ReservationSeatRepository reservationSeatRepository,
-            IdempotencyRecordRepository idempotencyRecordRepository,
-            UserReservationLimitRepository userReservationLimitRepository) {
-
+    public ReservationService(SeatRepository seatRepository, ReservationRepository reservationRepository, ReservationSeatRepository reservationSeatRepository, IdempotencyRecordRepository idempotencyRecordRepository, UserReservationLimitRepository userReservationLimitRepository, ReservationMetricsService reservationMetricsService) {
         this.seatRepository = seatRepository;
         this.reservationRepository = reservationRepository;
         this.reservationSeatRepository = reservationSeatRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
         this.userReservationLimitRepository = userReservationLimitRepository;
+        this.reservationMetricsService = reservationMetricsService;
     }
 
     @Transactional
@@ -159,6 +155,7 @@ public class ReservationService {
         reservationRepository.save(reservation);
 
         incrementUserReservationCount(userReservationLimit);
+        reservationMetricsService.reservationConfirmed();
 
         List<Long> seatIds =
                 reservationSeats.stream()
@@ -208,6 +205,9 @@ public class ReservationService {
 
         if (userReservationLimit.getConfirmedCount()
                 >= MAX_RESERVATIONS_PER_USER) {
+
+            reservationMetricsService
+                    .reservationDeclinedUserLimit();
 
             throw new ReservationException(
                     "User has reached the maximum reservation limit");
@@ -261,6 +261,8 @@ public class ReservationService {
                         .sorted()
                         .toList();
 
+        reservationMetricsService.reservationDeclinedIdempotentReplay();
+
         return buildResponse(reservation, seatIds);
     }
 
@@ -276,6 +278,10 @@ public class ReservationService {
         for (Seat seat : seats) {
 
             if (seat.getStatus() != SeatStatus.AVAILABLE) {
+
+                reservationMetricsService
+                        .reservationDeclinedSeatTaken();
+
                 throw new SeatUnavailableException(
                         "Seat " + seat.getSeatNumber()
                                 + " is not available");
